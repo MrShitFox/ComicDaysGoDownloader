@@ -14,7 +14,7 @@ ComicDaysGoDownloader is an open-source tool written in Go for downloading and d
 
 ComicDaysGoDownloader is a console application that allows you to download manga from the Comic Days website to your computer. To use the program, you need to run it and insert a valid URL of the manga page you want to download. All pages will be downloaded into a separate folder created in the same location as the program. The folder name will contain the date and time of the download.
 
-Example URL to insert into the program: `[https://comic-days.com/episode/2550689798731966148]`
+Example URL to insert into the program: `https://comic-days.com/episode/2550689798731966148`
 
 ## Installation
 
