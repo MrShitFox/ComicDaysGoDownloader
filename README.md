@@ -1,75 +1,57 @@
 # ComicDaysGoDownloader
 
-ComicDaysGoDownloader is an open-source tool written in Go for downloading and deobfuscating manga from the Comic Days website.
+**ComicDaysGoDownloader** is an open-source tool written in Go (version **1.23.1** or higher) for downloading and deobfuscating manga from the [Comic Days](https://comic-days.com/) website.
 
 ## Features
 
-- Download manga from Comic Days website
-- Automatic deobfuscation of downloaded pages
-- Cookie-based authentication support
-- Sequential page processing
-- Simple command-line interface
+- **Download Manga:** Easily download manga chapters from the Comic Days website.
+- **Automatic Deobfuscation:** Automatically deobfuscates downloaded pages for seamless reading.
+- **Cookie-Based Authentication:** Supports authenticated downloads using cookies.
+- **Sequential Page Processing:** Downloads and processes pages in order.
+- **Simple CLI:** User-friendly command-line interface for effortless operation.
 
 ## How It Works
 
-ComicDaysGoDownloader is a console application that allows you to download manga from the Comic Days website to your computer. To use the program, you need to run it and insert a valid URL of the manga page you want to download. All pages will be downloaded into a separate folder created in the same location as the program. The folder name will contain the date and time of the download.
+ComicDaysGoDownloader is a console application that downloads manga from the Comic Days website directly to your computer. Follow these steps to use the program:
 
-Example URL to insert into the program: `https://comic-days.com/episode/2550689798731966148`
+1. **Run the Program:** Execute the `ComicDaysGoDownloader` binary.
+2. **Enter Manga URL:** Provide a valid URL of the manga episode you wish to download.
+   - *Example URL:* `https://comic-days.com/episode/2550689798731966148`
+3. **Download Process:** The tool will download all pages and save them in a newly created folder named with the current date and time.
 
 ## Installation
 
-### Option 1: Download pre-built binaries
+### Download Pre-Built Binaries
 
-1. Go to the [Releases](https://github.com/your-username/ComicDaysGoDownloader/releases) page of this repository.
+1. Visit the [Releases](https://github.com/MrShitFox/ComicDaysGoDownloader/releases) page of this repository.
 2. Download the latest version for your operating system (Windows, macOS, or Linux).
-3. Extract the downloaded archive to a folder of your choice.
-
-### Option 2: Build from source
-
-1. Ensure you have Go installed (version 1.16 or higher).
-2. Clone the repository:
-   ```
-   git clone https://github.com/MrShitFox/ComicDaysGoDownloader.git
-   ```
-3. Navigate to the project directory:
-   ```
-   cd ComicDaysGoDownloader
-   ```
-4. Install dependencies:
-   ```
-   go mod tidy
-   ```
-5. Build the executable:
-   ```
-   go build -o ComicDaysGoDownloader
-   ```
+3. Extract the downloaded archive to a desired location.
 
 ## Usage
 
-### Using pre-built binaries
+### Running the Downloader
 
-1. Open a terminal or command prompt.
-2. Navigate to the folder containing the ComicDaysGoDownloader executable.
-3. Run the program:
-   - On Windows: `ComicDaysGoDownloader.exe`
-   - On macOS/Linux: `./ComicDaysGoDownloader`
-4. Insert the manga URL when prompted by the program.
-5. Wait for the download and deobfuscation process to complete.
+1. **Open Terminal or Command Prompt.**
+2. **Navigate to the Executable Folder:**
+   - Example:
+     ```sh
+     cd path/to/ComicDaysGoDownloader
+     ```
+3. **Run the Program:**
+   - On Windows:
+     ```sh
+     ComicDaysGoDownloader.exe
+     ```
+   - On macOS/Linux:
+     ```sh
+     ./ComicDaysGoDownloader
+     ```
+4. **Enter Manga URL:** When prompted, input the URL of the manga episode you want to download.
+5. **Wait for Completion:** The tool will handle downloading and deobfuscating all pages automatically.
 
-### Using source code
+### Using Cookies for Authentication
 
-1. Open a terminal or command prompt.
-2. Navigate to the project directory.
-3. Run the program:
-   ```
-   go run main.go
-   ```
-4. Insert the manga URL when prompted by the program.
-5. Wait for the download and deobfuscation process to complete.
-
-### Using Cookies
-
-If you need to use authentication to access certain manga, create a `cookie.json` file in the same directory as the executable (or in the project root if running from source) with the following content:
+If the manga requires authentication, create a `cookie.json` file in the same directory as the executable with the following structure:
 
 ```json
 [
@@ -89,20 +71,27 @@ If you need to use authentication to access certain manga, create a `cookie.json
 ]
 ```
 
-Replace `YOUR_COOKIE_VALUE` with the actual cookie value.
+- **Replace `YOUR_COOKIE_VALUE`** with your actual cookie value to enable authenticated downloads.
 
 ## Contributing
 
-We welcome contributions to the project! Please read our contributing guidelines before submitting a pull request.
+Contributions are welcome! If you'd like to contribute to ComicDaysGoDownloader:
+
+1. Fork the repository.
+2. Create a new branch for your feature or bugfix.
+3. Commit your changes with clear messages.
+4. Submit a pull request.
+
+Please ensure your contributions adhere to the project's coding standards and include necessary tests.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GNU General Public License v3.0**. See the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-This project is inspired by [ComicDaysDownloader](https://github.com/igorquintaes/ComicDaysDownloader) by igorquintaes. We are grateful for the deobfuscation idea that we adapted for our Go project.
+- Inspired by [ComicDaysDownloader](https://github.com/igorquintaes/ComicDaysDownloader) by igorquintaes.
 
 ## Disclaimer
 
-This tool is for personal use only. Please respect the copyright and terms of service of the Comic Days website. The authors of this tool are not responsible for any misuse or any violations of Comic Days' terms of service.
+**ComicDaysGoDownloader** is intended for personal use only. Please respect the copyright and terms of service of the Comic Days website. The authors are not responsible for any misuse or violations of Comic Days' terms of service.
