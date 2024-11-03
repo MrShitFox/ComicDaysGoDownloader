@@ -10,7 +10,6 @@ import (
     "image/png"
     "io/ioutil"
     "log"
-    "math"
     "net/http"
     "os"
     "path/filepath"
@@ -201,40 +200,18 @@ func deobfuscateAndSavePage(pageNum int, page Page, img image.Image, filesDir st
     fmt.Printf("Deobfuscating page %d...\n", pageNum)
 
     filePath := filepath.Join(filesDir, fmt.Sprintf("%03d.png", pageNum))
-    spacingUnit := math.Floor(float64(page.Width) / 32.0)
-    spacingWidth := int(spacingUnit) * 8
-    spacingHeight := int(math.Floor(float64(page.Height) / 32.0)) * 8
 
-    wMod32 := page.Width % 32
-    var rightStripWidth int
-    if wMod32 != 4 {
-        rightStripWidth = wMod32
-    } else {
-        rightStripWidth = 26
-    }
-
-    fmt.Printf("Calculated right strip width for page %d: %d pixels\n", pageNum, rightStripWidth)
+    spacingWidth := (page.Width / 32) * 8
+    spacingHeight := (page.Height / 32) * 8
 
     newImg := image.NewRGBA(image.Rect(0, 0, page.Width, page.Height))
 
-    rightStripRect := image.Rect(page.Width - rightStripWidth, 0, page.Width, page.Height)
-    draw.Draw(newImg, rightStripRect, img, rightStripRect.Min, draw.Src)
-
-    effectiveWidth := page.Width - rightStripWidth
-
-    for x := 0; x < effectiveWidth; x += spacingWidth {
-        maxSpacingWidth := min(spacingWidth, effectiveWidth - x)
-        for y := ((x / spacingWidth) * spacingHeight + spacingHeight); y < page.Height; y += spacingHeight {
-            maxSpacingHeight := min(spacingHeight, page.Height - y)
-
-            oldRect := image.Rect(x, y, x+maxSpacingWidth, y+maxSpacingHeight)
+    for x := 0; x+spacingWidth <= page.Width; x += spacingWidth {
+        for y := (x / spacingWidth) * spacingHeight + spacingHeight; y+spacingHeight <= page.Height; y += spacingHeight {
+            oldRect := image.Rect(x, y, x+spacingWidth, y+spacingHeight)
             newPosX := (y / spacingHeight) * spacingWidth
             newPosY := (x / spacingWidth) * spacingHeight
-            newRect := image.Rect(newPosX, newPosY, newPosX+maxSpacingWidth, newPosY+maxSpacingHeight)
-
-            if newPosX+maxSpacingWidth > effectiveWidth || newPosY+maxSpacingHeight > page.Height {
-                continue
-            }
+            newRect := image.Rect(newPosX, newPosY, newPosX+spacingWidth, newPosY+spacingHeight)
 
             draw.Draw(newImg, oldRect, img, newRect.Min, draw.Src)
             draw.Draw(newImg, newRect, img, oldRect.Min, draw.Src)
@@ -246,6 +223,15 @@ func deobfuscateAndSavePage(pageNum int, page Page, img image.Image, filesDir st
         midLineY := i * spacingHeight
         midRect := image.Rect(midLineX, midLineY, midLineX+spacingWidth, midLineY+spacingHeight)
         draw.Draw(newImg, midRect, img, midRect.Min, draw.Src)
+    }
+
+    rightTransparentWidth := detectTransparentStripWidth(newImg)
+    fmt.Printf("Detected transparent right strip width for page %d: %d pixels\n", pageNum, rightTransparentWidth)
+
+    if rightTransparentWidth > 0 {
+        sourceRect := image.Rect(page.Width-rightTransparentWidth, 0, page.Width, page.Height)
+        destRect := sourceRect
+        draw.Draw(newImg, destRect, img, sourceRect.Min, draw.Src)
     }
 
     outFile, err := os.Create(filePath)
@@ -260,9 +246,27 @@ func deobfuscateAndSavePage(pageNum int, page Page, img image.Image, filesDir st
     fmt.Printf("Page %d deobfuscated and saved.\n", pageNum)
 }
 
-func min(a, b int) int {
-    if a < b {
-        return a
+func detectTransparentStripWidth(img image.Image) int {
+    bounds := img.Bounds()
+    width := bounds.Dx()
+    height := bounds.Dy()
+
+    maxTransparentWidth := 0
+
+    for x := width - 1; x >= 0; x-- {
+        isTransparentColumn := true
+        for y := 0; y < height; y++ {
+            _, _, _, alpha := img.At(x, y).RGBA()
+            if alpha != 0 {
+                isTransparentColumn = false
+                break
+            }
+        }
+        if isTransparentColumn {
+            maxTransparentWidth++
+        } else {
+            break
+        }
     }
-    return b
+    return maxTransparentWidth
 }
