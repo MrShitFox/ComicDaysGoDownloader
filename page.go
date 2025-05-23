@@ -23,7 +23,7 @@ func NewPage(src string, width, height int) Page {
 	}
 }
 
-func (p *Page) Download(cookies []Cookie, pageNum int) (image.Image, error) {
+func (p Page) Download(cookies []Cookie, pageNum int) (image.Image, error) {
 	fmt.Printf("Downloading page %d...\n", pageNum)
 
 	client := &http.Client{}
@@ -61,7 +61,7 @@ func (p *Page) Download(cookies []Cookie, pageNum int) (image.Image, error) {
 	return img, nil
 }
 
-func (p *Page) DeobfuscateAndSave(img image.Image, outDir string, pageNum int) error {
+func (p Page) DeobfuscateAndSave(img image.Image, outDir string, pageNum int) error {
 	fmt.Printf("Deobfuscating page %d...\n", pageNum)
 
 	filePath := filepath.Join(outDir, fmt.Sprintf("%03d.png", pageNum))
