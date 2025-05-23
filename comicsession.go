@@ -25,41 +25,47 @@ type ComicSession struct {
 	OutDir  string
 }
 
-func (s *ComicSession) Init() error {
-	var err error
-	s.Cookies, err = NewFileCookieLoader("cookie.json").Load()
+func NewComicSession(cookieFile string) (*ComicSession, error) {
+	cookies, err := NewFileCookieLoader(cookieFile).Load()
 	if err != nil {
-		// Proceed without cookies
 		log.Printf("Warning: %v", err)
+		// 可選：若沒有 cookie 也可繼續，但你也可以選擇中止
 	}
 
-	s.URL, err = readComicDaysURL()
+	url, err := readComicDaysURL()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	s.Client = &http.Client{}
-	s.Doc, err = fetchComicHTML(s.URL, s.Cookies, s.Client)
+	client := &http.Client{}
+	doc, err := fetchComicHTML(url, cookies, client)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	jsonData, err := extractEpisodeJSON(s.Doc)
+	jsonData, err := extractEpisodeJSON(doc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	s.Pages, err = parsePages(jsonData)
+	pages, err := parsePages(jsonData)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	s.OutDir, err = createOutputDir()
+	outDir, err := createOutputDir()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &ComicSession{
+		Cookies: cookies,
+		Client:  client,
+		URL:     url,
+		Doc:     doc,
+		Pages:   pages,
+		OutDir:  outDir,
+	}, nil
 }
 
 func readComicDaysURL() (string, error) {

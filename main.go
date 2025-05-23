@@ -12,8 +12,8 @@ func main() {
 	fmt.Println("\nStage 1: Initialization")
 	fmt.Println("- This stage prepares the environment and retrieves manga information.")
 
-	session := &ComicSession{}
-	if err := session.Init(); err != nil {
+	session, err := NewComicSession("cookie.json")
+	if err != nil {
 		log.Fatal(err)
 	}
 
