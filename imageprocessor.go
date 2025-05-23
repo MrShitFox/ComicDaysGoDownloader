@@ -7,19 +7,19 @@ import (
 	"os"
 )
 
-type ImageContext struct {
+type ImageProcessor struct {
 	Src image.Image
 	Dst *image.RGBA
 }
 
-func NewImageContext(src image.Image) *ImageContext {
-	return &ImageContext{
+func NewImageContext(src image.Image) *ImageProcessor {
+	return &ImageProcessor{
 		Src: src,
 		Dst: nil,
 	}
 }
 
-func (ip *ImageContext) Deobfuscate(width, height int) *image.RGBA {
+func (ip *ImageProcessor) Deobfuscate(width, height int) *image.RGBA {
 	spacingWidth := (width / 32) * 8
 	spacingHeight := (height / 32) * 8
 
@@ -47,7 +47,7 @@ func (ip *ImageContext) Deobfuscate(width, height int) *image.RGBA {
 	return ip.Dst
 }
 
-func (ip *ImageContext) SaveImage(filePath string) error {
+func (ip *ImageProcessor) SaveImage(filePath string) error {
 	outFile, err := os.Create(filePath)
 	if err != nil {
 		return err
@@ -56,7 +56,7 @@ func (ip *ImageContext) SaveImage(filePath string) error {
 	return png.Encode(outFile, ip.Dst)
 }
 
-func (ip *ImageContext) RestoreRightTransparentStrip(width, height, stripWidth int) {
+func (ip *ImageProcessor) RestoreRightTransparentStrip(width, height, stripWidth int) {
 	if stripWidth <= 0 {
 		return
 	}
@@ -65,7 +65,7 @@ func (ip *ImageContext) RestoreRightTransparentStrip(width, height, stripWidth i
 	draw.Draw(ip.Dst, destRect, ip.Src, sourceRect.Min, draw.Src)
 }
 
-func (ip *ImageContext) DetectTransparentStripWidth() int {
+func (ip *ImageProcessor) DetectTransparentStripWidth() int {
 	bounds := ip.Dst.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
