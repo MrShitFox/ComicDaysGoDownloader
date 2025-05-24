@@ -1,6 +1,6 @@
 # ComicDaysGoDownloader
 
-[![Go Version](https://img.shields.io/badge/Go-1.23.1%2B-blue)](https://golang.org/) [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-red)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.24.3%2B-blue)](https://golang.org/) [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-red)](LICENSE)
 
 Tool for downloading and deobfuscating manga from ComicDays. Bypasses DRM protection for offline reading and usage.
 
