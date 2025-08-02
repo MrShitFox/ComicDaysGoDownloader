@@ -17,19 +17,19 @@ import (
 )
 
 type ComicSession struct {
-	Cookies []Cookie
-	Client  *http.Client
-	URL     string
-	Doc     *goquery.Document
-	Pages   []Page
-	OutDir  string
+	Cookies       []Cookie
+	NetworkClient *NetworkClient
+	URL           string
+	Doc           *goquery.Document
+	Pages         []Page
+	OutDir        string
 }
 
 func NewComicSession(cookieFile string) (*ComicSession, error) {
 	cookies, err := NewFileCookieLoader(cookieFile).Load()
 	if err != nil {
 		log.Printf("Warning: %v", err)
-		// 可選：若沒有 cookie 也可繼續，但你也可以選擇中止
+		// Optional: You can continue without cookies, but you can also choose to stop.
 	}
 
 	url, err := readComicDaysURL()
@@ -37,10 +37,17 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 		return nil, err
 	}
 
-	client := &http.Client{}
-	doc, err := fetchComicHTML(url, cookies, client)
-	if err != nil {
-		return nil, err
+	networkClient := NewNetworkClient(15 * time.Second)
+
+	var doc *goquery.Document
+	for {
+		doc, err = fetchComicHTML(url, cookies, networkClient)
+		if err == nil {
+			break
+		}
+		log.Printf("Error during initial fetch: %v", err)
+		log.Println("Retrying initial fetch in 10 seconds...")
+		time.Sleep(10 * time.Second)
 	}
 
 	jsonData, err := extractEpisodeJSON(doc)
@@ -59,23 +66,23 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 	}
 
 	return &ComicSession{
-		Cookies: cookies,
-		Client:  client,
-		URL:     url,
-		Doc:     doc,
-		Pages:   pages,
-		OutDir:  outDir,
+		Cookies:       cookies,
+		NetworkClient: networkClient,
+		URL:           url,
+		Doc:           doc,
+		Pages:         pages,
+		OutDir:        outDir,
 	}, nil
 }
 
 func readComicDaysURL() (string, error) {
-	fmt.Print("Please enter a manga link from comic-days website: ")
+	fmt.Print("Please enter a manga link from the comic-days website: ")
 	reader := bufio.NewReader(os.Stdin)
 	url, err := reader.ReadString('\n')
 	return strings.TrimSpace(url), err
 }
 
-func fetchComicHTML(url string, cookies []Cookie, client *http.Client) (*goquery.Document, error) {
+func fetchComicHTML(url string, cookies []Cookie, networkClient *NetworkClient) (*goquery.Document, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %v", err)
@@ -88,9 +95,9 @@ func fetchComicHTML(url string, cookies []Cookie, client *http.Client) (*goquery
 		})
 	}
 
-	resp, err := client.Do(req)
+	resp, err := networkClient.FetchWithRetries(req)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching the webpage: %v", err)
+		return nil, fmt.Errorf("failed to execute request after 5 attempts: %v", err)
 	}
 	defer resp.Body.Close()
 

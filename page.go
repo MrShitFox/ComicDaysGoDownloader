@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"image"
+	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/disintegration/imaging"
 )
@@ -23,10 +26,38 @@ func NewPage(src string, width, height int) Page {
 	}
 }
 
-func (p Page) Download(cookies []Cookie, pageNum int) (image.Image, error) {
-	fmt.Printf("Downloading page %d...\n", pageNum)
+func (p Page) Process(networkClient *NetworkClient, cookies []Cookie, outDir string, pageNum int) {
+	var img image.Image
+	var err error
 
-	client := &http.Client{}
+	localNetworkClient := networkClient
+
+	for {
+		fmt.Printf("Downloading page %d...\n", pageNum)
+		img, err = p.downloadAttempt(localNetworkClient, cookies, pageNum)
+		if err == nil {
+			break
+		}
+
+		log.Printf("Failed to download page %d: %v", pageNum, err)
+
+		if strings.Contains(err.Error(), "context deadline exceeded") {
+			log.Println("Critical timeout detected. Resetting the network client for the next attempt.")
+			localNetworkClient = NewNetworkClient(15 * time.Second)
+		}
+
+		log.Printf("Will retry page %d in 10 seconds...", pageNum)
+		time.Sleep(10 * time.Second)
+	}
+
+	fmt.Printf("Deobfuscating page %d...\n", pageNum)
+	err = p.deobfuscateAndSave(img, outDir, pageNum)
+	if err != nil {
+		log.Printf("Warning: Could not save page %d: %v", pageNum, err)
+	}
+}
+
+func (p Page) downloadAttempt(networkClient *NetworkClient, cookies []Cookie, pageNum int) (image.Image, error) {
 	req, err := http.NewRequest("GET", p.Src, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request for page %d: %v", pageNum, err)
@@ -42,28 +73,26 @@ func (p Page) Download(cookies []Cookie, pageNum int) (image.Image, error) {
 		})
 	}
 
-	resp, err := client.Do(req)
+	resp, err := networkClient.FetchWithRetries(req)
 	if err != nil {
-		return nil, fmt.Errorf("error downloading image for page %d: %v", pageNum, err)
+		return nil, fmt.Errorf("all retry attempts failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	img, err := imaging.Decode(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding image for page %d: %v", pageNum, err)
+		return nil, fmt.Errorf("error decoding image: %v", err)
 	}
 
 	if img == nil {
-		return nil, fmt.Errorf("skipping page %d due to download error", pageNum)
+		return nil, fmt.Errorf("downloaded image is empty")
 	}
 
 	fmt.Printf("Page %d downloaded successfully.\n", pageNum)
 	return img, nil
 }
 
-func (p Page) DeobfuscateAndSave(img image.Image, outDir string, pageNum int) error {
-	fmt.Printf("Deobfuscating page %d...\n", pageNum)
-
+func (p Page) deobfuscateAndSave(img image.Image, outDir string, pageNum int) error {
 	filePath := filepath.Join(outDir, fmt.Sprintf("%03d.png", pageNum))
 	imageCtx := NewImageContext(img)
 	imageCtx.Deobfuscate(p.Width, p.Height)

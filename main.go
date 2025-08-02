@@ -23,19 +23,7 @@ func main() {
 	for i, page := range session.Pages {
 		pageNum := i + 1
 		fmt.Printf("\nProcessing page %d of %d\n", pageNum, len(session.Pages))
-
-		img, err := page.Download(session.Cookies, pageNum)
-		if err != nil {
-			log.Printf("Warning: %v", err)
-		}
-		if img == nil {
-			continue
-		}
-
-		err = page.DeobfuscateAndSave(img, session.OutDir, pageNum)
-		if err != nil {
-			log.Printf("Warning: %v", err)
-		}
+		page.Process(session.NetworkClient, session.Cookies, session.OutDir, pageNum)
 	}
 
 	fmt.Println("\nStage 3: Completion")
