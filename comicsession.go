@@ -3,18 +3,23 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
+
+// defaultUserAgent is sent with every request so the site does not reject the
+// default Go HTTP client user agent.
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 type ComicSession struct {
 	Cookies       []Cookie
@@ -44,6 +49,9 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 		doc, err = fetchComicHTML(url, cookies, networkClient)
 		if err == nil {
 			break
+		}
+		if IsPermanent(err) {
+			return nil, fmt.Errorf("could not load the page: %w", err)
 		}
 		log.Printf("Error during initial fetch: %v", err)
 		log.Println("Retrying initial fetch in 10 seconds...")
@@ -78,15 +86,27 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 func readComicDaysURL() (string, error) {
 	fmt.Print("Please enter a manga link from the comic-days website: ")
 	reader := bufio.NewReader(os.Stdin)
-	url, err := reader.ReadString('\n')
-	return strings.TrimSpace(url), err
+	line, err := reader.ReadString('\n')
+	url := strings.TrimSpace(line)
+	// ReadString returns io.EOF together with the data when the input has no
+	// trailing newline (e.g. when the URL is piped in). Only treat it as a
+	// failure when nothing was read.
+	if err != nil && !(errors.Is(err, io.EOF) && url != "") {
+		return "", err
+	}
+	if url == "" {
+		return "", fmt.Errorf("no URL was provided")
+	}
+	return url, nil
 }
 
 func fetchComicHTML(url string, cookies []Cookie, networkClient *NetworkClient) (*goquery.Document, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error creating request: %v", err)
+		return nil, &PermanentError{Err: fmt.Errorf("error creating request: %v", err)}
 	}
+
+	req.Header.Set("User-Agent", defaultUserAgent)
 
 	for _, cookie := range cookies {
 		req.AddCookie(&http.Cookie{
@@ -97,7 +117,7 @@ func fetchComicHTML(url string, cookies []Cookie, networkClient *NetworkClient) 
 
 	resp, err := networkClient.FetchWithRetries(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request after 5 attempts: %v", err)
+		return nil, fmt.Errorf("failed to fetch the page: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -158,16 +178,14 @@ func parsePages(jsonData string) ([]Page, error) {
 		}
 	}
 
-	sort.Slice(validPages, func(i, j int) bool {
-		return validPages[i].Src < validPages[j].Src
-	})
-
+	// The pages array is already in reading order; keep it as-is. Sorting by the
+	// CDN src would reorder pages if the opaque image IDs are not monotonic.
 	return validPages, nil
 }
 
 func createOutputDir() (string, error) {
 	dir := filepath.Join(".", time.Now().Format("2006-01-02-15-04-05"))
-	err := os.MkdirAll(dir, os.ModePerm)
+	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return "", fmt.Errorf("failed to create output directory: %v", err)
 	}

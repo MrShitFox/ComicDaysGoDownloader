@@ -6,11 +6,12 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/disintegration/imaging"
 )
+
+const retryDelay = 10 * time.Second
 
 type Page struct {
 	Src    string `json:"src"`
@@ -26,45 +27,48 @@ func NewPage(src string, width, height int) Page {
 	}
 }
 
-func (p Page) Process(networkClient *NetworkClient, cookies []Cookie, outDir string, pageNum int) {
+// Process downloads, deobfuscates and saves a single page. It retries transient
+// failures indefinitely but gives up on permanent errors (for example a page
+// that requires a purchase) instead of looping forever. It returns an error
+// only when the page could not be produced.
+func (p Page) Process(networkClient *NetworkClient, cookies []Cookie, outDir string, pageNum int) error {
 	var img image.Image
 	var err error
 
-	localNetworkClient := networkClient
-
-	for {
+	for attempt := 1; ; attempt++ {
 		fmt.Printf("Downloading page %d...\n", pageNum)
-		img, err = p.downloadAttempt(localNetworkClient, cookies, pageNum)
+		img, err = p.downloadAttempt(networkClient, cookies, pageNum)
 		if err == nil {
 			break
 		}
 
-		log.Printf("Failed to download page %d: %v", pageNum, err)
-
-		if strings.Contains(err.Error(), "context deadline exceeded") {
-			log.Println("Critical timeout detected. Resetting the network client for the next attempt.")
-			localNetworkClient = NewNetworkClient(15 * time.Second)
+		if IsPermanent(err) {
+			log.Printf("Giving up on page %d: %v", pageNum, err)
+			return fmt.Errorf("page %d: %w", pageNum, err)
 		}
 
-		log.Printf("Will retry page %d in 10 seconds...", pageNum)
-		time.Sleep(10 * time.Second)
+		log.Printf("Failed to download page %d (attempt %d): %v", pageNum, attempt, err)
+		log.Printf("Will retry page %d in %v...", pageNum, retryDelay)
+		time.Sleep(retryDelay)
 	}
 
 	fmt.Printf("Deobfuscating page %d...\n", pageNum)
-	err = p.deobfuscateAndSave(img, outDir, pageNum)
-	if err != nil {
+	if err := p.deobfuscateAndSave(img, outDir, pageNum); err != nil {
 		log.Printf("Warning: Could not save page %d: %v", pageNum, err)
+		return fmt.Errorf("page %d: %w", pageNum, err)
 	}
+	return nil
 }
 
 func (p Page) downloadAttempt(networkClient *NetworkClient, cookies []Cookie, pageNum int) (image.Image, error) {
 	req, err := http.NewRequest("GET", p.Src, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error creating request for page %d: %v", pageNum, err)
+		return nil, &PermanentError{Err: fmt.Errorf("error creating request for page %d: %v", pageNum, err)}
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	req.Header.Set("User-Agent", defaultUserAgent)
 	req.Header.Set("Referer", "https://comic-days.com/")
+	req.Header.Set("Origin", "https://comic-days.com")
 
 	for _, cookie := range cookies {
 		req.AddCookie(&http.Cookie{
@@ -75,17 +79,17 @@ func (p Page) downloadAttempt(networkClient *NetworkClient, cookies []Cookie, pa
 
 	resp, err := networkClient.FetchWithRetries(req)
 	if err != nil {
-		return nil, fmt.Errorf("all retry attempts failed: %v", err)
+		return nil, fmt.Errorf("failed to download page %d: %w", pageNum, err)
 	}
 	defer resp.Body.Close()
 
 	img, err := imaging.Decode(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding image: %v", err)
+		return nil, fmt.Errorf("error decoding image for page %d: %v", pageNum, err)
 	}
 
 	if img == nil {
-		return nil, fmt.Errorf("downloaded image is empty")
+		return nil, fmt.Errorf("downloaded image for page %d is empty", pageNum)
 	}
 
 	fmt.Printf("Page %d downloaded successfully.\n", pageNum)
@@ -96,13 +100,8 @@ func (p Page) deobfuscateAndSave(img image.Image, outDir string, pageNum int) er
 	filePath := filepath.Join(outDir, fmt.Sprintf("%03d.png", pageNum))
 	imageCtx := NewImageContext(img)
 	imageCtx.Deobfuscate(p.Width, p.Height)
-	rightTransparentWidth := imageCtx.DetectTransparentStripWidth()
-	fmt.Printf("Detected transparent right strip width for page %d: %d pixels\n", pageNum, rightTransparentWidth)
 
-	imageCtx.RestoreRightTransparentStrip(p.Width, p.Height, rightTransparentWidth)
-
-	err := imageCtx.SaveImage(filePath)
-	if err != nil {
+	if err := imageCtx.SaveImage(filePath); err != nil {
 		return fmt.Errorf("error creating file for page %d: %v", pageNum, err)
 	}
 
