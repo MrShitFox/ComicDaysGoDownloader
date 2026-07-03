@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/draw"
 	"image/png"
 	"os"
+	"path/filepath"
 )
 
 // Comic Days scrambles images by splitting the picture into a
@@ -32,6 +34,11 @@ func NewImageContext(src image.Image) *ImageProcessor {
 
 // Deobfuscate reverses the Comic Days scrambling and stores the result in Dst.
 func (ip *ImageProcessor) Deobfuscate(width, height int) *image.RGBA {
+	if ip.Src == nil || width <= 0 || height <= 0 {
+		ip.Dst = nil
+		return nil
+	}
+
 	cellWidth := (width / (divideNum * multiple)) * multiple
 	cellHeight := (height / (divideNum * multiple)) * multiple
 
@@ -68,10 +75,32 @@ func (ip *ImageProcessor) Deobfuscate(width, height int) *image.RGBA {
 }
 
 func (ip *ImageProcessor) SaveImage(filePath string) error {
-	outFile, err := os.Create(filePath)
+	if ip.Dst == nil {
+		return fmt.Errorf("image has not been deobfuscated")
+	}
+
+	outFile, err := os.CreateTemp(filepath.Dir(filePath), ".tmp-*.png")
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
-	return png.Encode(outFile, ip.Dst)
+	tmpName := outFile.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := png.Encode(outFile, ip.Dst); err != nil {
+		_ = outFile.Close()
+		return err
+	}
+	if err := outFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, filePath); err != nil {
+		return err
+	}
+	removeTemp = false
+	return nil
 }

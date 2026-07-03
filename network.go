@@ -22,6 +22,10 @@ const (
 // non-retrying failure. A nil observer simply disables notifications.
 type RetryObserver func(attempt, maxAttempts int, err error, delay time.Duration)
 
+type HTTPFetcher interface {
+	FetchWithRetries(req *http.Request, onRetry RetryObserver) (*http.Response, error)
+}
+
 // PermanentError marks a failure that will not be resolved by retrying (for
 // example an HTTP 4xx response or a malformed request). Callers can detect it
 // with errors.As to stop retrying instead of looping forever.
@@ -56,11 +60,26 @@ func NewNetworkClient(timeout time.Duration) *NetworkClient {
 // returned as a *PermanentError so callers can stop retrying. onRetry may be
 // nil.
 func (nc *NetworkClient) FetchWithRetries(req *http.Request, onRetry RetryObserver) (*http.Response, error) {
+	if req == nil {
+		return nil, &PermanentError{Err: fmt.Errorf("request is nil")}
+	}
+	if req.Body != nil && req.GetBody == nil {
+		return nil, &PermanentError{Err: fmt.Errorf("request body cannot be replayed for retries")}
+	}
+
 	var lastErr error
-	lastPermanent := false
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		resp, err := nc.client.Do(req)
+		attemptReq := req.Clone(req.Context())
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, &PermanentError{Err: fmt.Errorf("could not replay request body: %w", err)}
+			}
+			attemptReq.Body = body
+		}
+
+		resp, err := nc.client.Do(attemptReq)
 		switch {
 		case err != nil:
 			if isTimeout(err) {
@@ -73,7 +92,6 @@ func (nc *NetworkClient) FetchWithRetries(req *http.Request, onRetry RetryObserv
 				return nil, err
 			}
 			lastErr = err
-			lastPermanent = false
 		case resp.StatusCode >= 200 && resp.StatusCode < 300:
 			return resp, nil
 		default:
@@ -83,7 +101,9 @@ func (nc *NetworkClient) FetchWithRetries(req *http.Request, onRetry RetryObserv
 			resp.Body.Close()
 			status := resp.StatusCode
 			lastErr = fmt.Errorf("server returned HTTP %d %s", status, http.StatusText(status))
-			lastPermanent = status >= 400 && status < 500 && status != http.StatusTooManyRequests
+			if status >= 400 && status < 500 && status != http.StatusTooManyRequests {
+				return nil, &PermanentError{Err: lastErr}
+			}
 		}
 
 		if attempt < maxRetries-1 {
@@ -95,10 +115,10 @@ func (nc *NetworkClient) FetchWithRetries(req *http.Request, onRetry RetryObserv
 		}
 	}
 
-	err := fmt.Errorf("failed to execute request after %d attempts: %w", maxRetries, lastErr)
-	if lastPermanent {
-		return nil, &PermanentError{Err: err}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unknown network error")
 	}
+	err := fmt.Errorf("failed to execute request after %d attempts: %w", maxRetries, lastErr)
 	return nil, err
 }
 

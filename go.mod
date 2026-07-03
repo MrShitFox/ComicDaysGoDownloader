@@ -1,4 +1,4 @@
-module mangaNaeb
+module github.com/MrShitFox/ComicDaysGoDownloader
 
 go 1.24.3
 

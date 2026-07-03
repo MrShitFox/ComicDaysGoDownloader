@@ -3,17 +3,23 @@ package main
 import "fmt"
 
 func main() {
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
+
+func run() error {
 	printBanner()
 
 	printStage(1, "Initialization", "Reading cookies, asking for a chapter URL and fetching + parsing its page data.")
 	session, err := NewComicSession("cookie.json")
 	if err != nil {
-		fatal(err)
+		return err
 	}
 
 	printStage(2, "Download & Deobfuscation", "Downloading each page and reversing Comic Days' grid-transpose scrambling.")
 	if len(session.Pages) == 0 {
-		fatal(fmt.Errorf("no pages were found for this chapter — it may be unavailable or require a valid cookie"))
+		return fmt.Errorf("no pages were found for this chapter — it may be unavailable or require a valid cookie")
 	}
 
 	printDeobfuscationLegend()
@@ -30,4 +36,8 @@ func main() {
 
 	printStage(3, "Summary", "Here's how the run went.")
 	printFinalSummary(stats)
+	if stats.Failed > 0 {
+		return fmt.Errorf("%d page(s) failed", stats.Failed)
+	}
+	return nil
 }
