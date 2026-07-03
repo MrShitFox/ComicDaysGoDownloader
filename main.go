@@ -1,44 +1,33 @@
 package main
 
-import (
-	"fmt"
-	"log"
-)
+import "fmt"
 
 func main() {
-	fmt.Println("Comic Days Manga Downloader and Deobfuscator")
-	fmt.Println("============================================")
+	printBanner()
 
-	fmt.Println("\nStage 1: Initialization")
-	fmt.Println("- This stage prepares the environment and retrieves manga information.")
-
+	printStage(1, "Initialization", "Reading cookies, asking for a chapter URL and fetching + parsing its page data.")
 	session, err := NewComicSession("cookie.json")
 	if err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
 
-	fmt.Println("\nStage 2: Downloading and Deobfuscating Pages")
-	fmt.Println("- This stage downloads, deobfuscates, and saves each page of the manga.")
-
+	printStage(2, "Download & Deobfuscation", "Downloading each page and reversing Comic Days' grid-transpose scrambling.")
 	if len(session.Pages) == 0 {
-		log.Fatal("No pages were found for this chapter. It may be unavailable or require a valid cookie.")
+		fatal(fmt.Errorf("no pages were found for this chapter — it may be unavailable or require a valid cookie"))
 	}
 
-	failed := 0
+	printDeobfuscationLegend()
+
+	pl := StartPipeline(len(session.Pages))
 	for i, page := range session.Pages {
 		pageNum := i + 1
-		fmt.Printf("\nProcessing page %d of %d\n", pageNum, len(session.Pages))
-		if err := page.Process(session.NetworkClient, session.Cookies, session.OutDir, pageNum); err != nil {
-			failed++
-			log.Printf("Page %d could not be downloaded: %v", pageNum, err)
-		}
+		// Process already reports success/failure for this page through pl,
+		// so the returned error only decides the exit code of the loop body,
+		// not whether anything more needs to be printed here.
+		_ = page.Process(session.NetworkClient, session.Cookies, session.OutDir, pageNum, pl)
 	}
+	stats := pl.Finish(session.OutDir)
 
-	fmt.Println("\nStage 3: Completion")
-	if failed == 0 {
-		fmt.Println("- All pages have been processed and saved.")
-	} else {
-		fmt.Printf("- Done, but %d of %d pages could not be downloaded.\n", failed, len(session.Pages))
-	}
-	fmt.Printf("- You can find the downloaded manga in the directory: %s\n", session.OutDir)
+	printStage(3, "Summary", "Here's how the run went.")
+	printFinalSummary(stats)
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -15,6 +14,13 @@ const (
 	maxRetries = 5
 	baseDelay  = 1 * time.Second
 )
+
+// RetryObserver is notified before FetchWithRetries sleeps and retries a
+// request, so callers can surface progress in their own UI (a spinner, a log
+// line, ...) instead of the network layer printing directly. It is also
+// called, with delay 0, when a client-side timeout forces an immediate,
+// non-retrying failure. A nil observer simply disables notifications.
+type RetryObserver func(attempt, maxAttempts int, err error, delay time.Duration)
 
 // PermanentError marks a failure that will not be resolved by retrying (for
 // example an HTTP 4xx response or a malformed request). Callers can detect it
@@ -47,8 +53,9 @@ func NewNetworkClient(timeout time.Duration) *NetworkClient {
 // FetchWithRetries performs the request, retrying transient failures with
 // exponential backoff. A successful call returns a response with a 2xx status
 // whose Body the caller must close. Persistent 4xx responses (except 429) are
-// returned as a *PermanentError so callers can stop retrying.
-func (nc *NetworkClient) FetchWithRetries(req *http.Request) (*http.Response, error) {
+// returned as a *PermanentError so callers can stop retrying. onRetry may be
+// nil.
+func (nc *NetworkClient) FetchWithRetries(req *http.Request, onRetry RetryObserver) (*http.Response, error) {
 	var lastErr error
 	lastPermanent := false
 
@@ -60,7 +67,9 @@ func (nc *NetworkClient) FetchWithRetries(req *http.Request) (*http.Response, er
 				// The overall client timeout elapsed. Retrying within the same
 				// short-lived client is unlikely to help, so fail fast and let
 				// the higher level decide whether to try again.
-				log.Println("Timeout error detected in network layer. Failing fast.")
+				if onRetry != nil {
+					onRetry(attempt+1, maxRetries, err, 0)
+				}
 				return nil, err
 			}
 			lastErr = err
@@ -79,7 +88,9 @@ func (nc *NetworkClient) FetchWithRetries(req *http.Request) (*http.Response, er
 
 		if attempt < maxRetries-1 {
 			delay := baseDelay * time.Duration(1<<attempt)
-			log.Printf("Request failed (attempt %d/%d): %v. Retrying in %v...", attempt+1, maxRetries, lastErr, delay)
+			if onRetry != nil {
+				onRetry(attempt+1, maxRetries, lastErr, delay)
+			}
 			time.Sleep(delay)
 		}
 	}

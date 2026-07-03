@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/pterm/pterm"
 )
 
 // defaultUserAgent is sent with every request so the site does not reject the
@@ -32,10 +32,9 @@ type ComicSession struct {
 
 func NewComicSession(cookieFile string) (*ComicSession, error) {
 	cookies, err := NewFileCookieLoader(cookieFile).Load()
-	if err != nil {
-		log.Printf("Warning: %v", err)
-		// Optional: You can continue without cookies, but you can also choose to stop.
-	}
+	reportCookieLoad(cookies, err)
+	// A missing/broken cookie file is not fatal — the session simply
+	// continues unauthenticated, which reportCookieLoad already explained.
 
 	url, err := readComicDaysURL()
 	if err != nil {
@@ -44,18 +43,9 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 
 	networkClient := NewNetworkClient(15 * time.Second)
 
-	var doc *goquery.Document
-	for {
-		doc, err = fetchComicHTML(url, cookies, networkClient)
-		if err == nil {
-			break
-		}
-		if IsPermanent(err) {
-			return nil, fmt.Errorf("could not load the page: %w", err)
-		}
-		log.Printf("Error during initial fetch: %v", err)
-		log.Println("Retrying initial fetch in 10 seconds...")
-		time.Sleep(10 * time.Second)
+	doc, err := fetchComicHTMLWithRetry(url, cookies, networkClient)
+	if err != nil {
+		return nil, err
 	}
 
 	jsonData, err := extractEpisodeJSON(doc)
@@ -67,11 +57,14 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	pterm.Success.Printfln("📖 Parsed episode data — %d page(s) found", len(pages))
 
 	outDir, err := createOutputDir()
 	if err != nil {
 		return nil, err
 	}
+
+	printSessionSummary(len(pages), outDir, len(cookies))
 
 	return &ComicSession{
 		Cookies:       cookies,
@@ -83,8 +76,29 @@ func NewComicSession(cookieFile string) (*ComicSession, error) {
 	}, nil
 }
 
+// fetchComicHTMLWithRetry wraps fetchComicHTML in an indefinite retry loop
+// for transient failures, narrating progress through a spinner. It gives up
+// immediately on permanent errors (for example a chapter that requires a
+// purchase).
+func fetchComicHTMLWithRetry(url string, cookies []Cookie, networkClient *NetworkClient) (*goquery.Document, error) {
+	sp := newSpinner("Fetching chapter page...")
+	for {
+		doc, err := fetchComicHTML(url, cookies, networkClient, spinnerRetryObserver(sp, "fetch"))
+		if err == nil {
+			sp.Success("Chapter page fetched")
+			return doc, nil
+		}
+		if IsPermanent(err) {
+			sp.Fail("Could not fetch the chapter page — see error below")
+			return nil, fmt.Errorf("could not load the page: %w", err)
+		}
+		sp.UpdateText(fmt.Sprintf("fetch failed: %v — retrying in 10s...", err))
+		time.Sleep(10 * time.Second)
+	}
+}
+
 func readComicDaysURL() (string, error) {
-	fmt.Print("Please enter a manga link from the comic-days website: ")
+	printURLPrompt()
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	url := strings.TrimSpace(line)
@@ -100,7 +114,7 @@ func readComicDaysURL() (string, error) {
 	return url, nil
 }
 
-func fetchComicHTML(url string, cookies []Cookie, networkClient *NetworkClient) (*goquery.Document, error) {
+func fetchComicHTML(url string, cookies []Cookie, networkClient *NetworkClient, onRetry RetryObserver) (*goquery.Document, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, &PermanentError{Err: fmt.Errorf("error creating request: %v", err)}
@@ -115,7 +129,7 @@ func fetchComicHTML(url string, cookies []Cookie, networkClient *NetworkClient) 
 		})
 	}
 
-	resp, err := networkClient.FetchWithRetries(req)
+	resp, err := networkClient.FetchWithRetries(req, onRetry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch the page: %w", err)
 	}
