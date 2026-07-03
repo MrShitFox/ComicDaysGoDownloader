@@ -3,13 +3,21 @@ package main
 import (
 	"fmt"
 	"image"
-	"log"
+	"io"
+	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/disintegration/imaging"
+)
+
+const (
+	retryDelay              = 10 * time.Second
+	maxPageDownloadAttempts = 3
+	maxPagePixels           = 100_000_000
 )
 
 type Page struct {
@@ -26,86 +34,176 @@ func NewPage(src string, width, height int) Page {
 	}
 }
 
-func (p Page) Process(networkClient *NetworkClient, cookies []Cookie, outDir string, pageNum int) {
+// countingReader tallies how many bytes have passed through it, which lets
+// the UI report real download sizes even though the image is decoded
+// straight from the streaming HTTP response body.
+type countingReader struct {
+	r     io.Reader
+	count int64
+}
+
+func (c *countingReader) Read(buf []byte) (int, error) {
+	n, err := c.r.Read(buf)
+	c.count += int64(n)
+	return n, err
+}
+
+// Process downloads, deobfuscates and saves a single page, narrating every
+// step through pl. It retries transient failures a bounded number of times but
+// gives up on permanent errors (for example a page that requires a purchase)
+// immediately. It returns an error only when the page could not be
+// produced; pl has already reported success or failure by the time it does.
+func (p Page) Process(networkClient HTTPFetcher, cookies []Cookie, outDir string, pageNum int, pl *Pipeline) error {
+	start := time.Now()
+
 	var img image.Image
+	var downloadedBytes int64
 	var err error
 
-	localNetworkClient := networkClient
-
-	for {
-		fmt.Printf("Downloading page %d...\n", pageNum)
-		img, err = p.downloadAttempt(localNetworkClient, cookies, pageNum)
+	for attempt := 1; attempt <= maxPageDownloadAttempts; attempt++ {
+		pl.Status(pageNum, "downloading...")
+		img, downloadedBytes, err = p.downloadAttempt(networkClient, cookies, pageNum, pl)
 		if err == nil {
 			break
 		}
 
-		log.Printf("Failed to download page %d: %v", pageNum, err)
-
-		if strings.Contains(err.Error(), "context deadline exceeded") {
-			log.Println("Critical timeout detected. Resetting the network client for the next attempt.")
-			localNetworkClient = NewNetworkClient(15 * time.Second)
+		if IsPermanent(err) {
+			pl.PageFailed(pageNum, err)
+			return fmt.Errorf("page %d: %w", pageNum, err)
+		}
+		if attempt == maxPageDownloadAttempts {
+			finalErr := fmt.Errorf("download failed after %d attempts: %w", attempt, err)
+			pl.PageFailed(pageNum, finalErr)
+			return fmt.Errorf("page %d: %w", pageNum, finalErr)
 		}
 
-		log.Printf("Will retry page %d in 10 seconds...", pageNum)
-		time.Sleep(10 * time.Second)
+		pl.Status(pageNum, "download failed (attempt %d): %v — retrying in %v...", attempt, err, retryDelay)
+		time.Sleep(retryDelay)
 	}
 
-	fmt.Printf("Deobfuscating page %d...\n", pageNum)
-	err = p.deobfuscateAndSave(img, outDir, pageNum)
+	pl.Status(pageNum, "reversing %dx%d grid transpose...", divideNum, divideNum)
+	savedBytes, err := p.deobfuscateAndSave(img, outDir, pageNum)
 	if err != nil {
-		log.Printf("Warning: Could not save page %d: %v", pageNum, err)
+		pl.PageFailed(pageNum, err)
+		return fmt.Errorf("page %d: %w", pageNum, err)
 	}
+
+	pl.PageSucceeded(pageResult{
+		pageNum:       pageNum,
+		width:         p.Width,
+		height:        p.Height,
+		downloadBytes: downloadedBytes,
+		savedBytes:    savedBytes,
+		elapsed:       time.Since(start),
+	})
+	return nil
 }
 
-func (p Page) downloadAttempt(networkClient *NetworkClient, cookies []Cookie, pageNum int) (image.Image, error) {
-	req, err := http.NewRequest("GET", p.Src, nil)
+func (p Page) downloadAttempt(networkClient HTTPFetcher, cookies []Cookie, pageNum int, pl *Pipeline) (image.Image, int64, error) {
+	src, err := normalizeComicDaysAssetURL(p.Src)
 	if err != nil {
-		return nil, fmt.Errorf("error creating request for page %d: %v", pageNum, err)
+		return nil, 0, &PermanentError{Err: fmt.Errorf("invalid page %d src: %w", pageNum, err)}
+	}
+	req, err := http.NewRequest("GET", src, nil)
+	if err != nil {
+		return nil, 0, &PermanentError{Err: fmt.Errorf("error creating request for page %d: %v", pageNum, err)}
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	req.Header.Set("User-Agent", defaultUserAgent)
 	req.Header.Set("Referer", "https://comic-days.com/")
+	req.Header.Set("Origin", "https://comic-days.com")
+	addCookies(req, cookies)
 
-	for _, cookie := range cookies {
-		req.AddCookie(&http.Cookie{
-			Name:  cookie.Name,
-			Value: cookie.Value,
-		})
+	var onRetry RetryObserver
+	if pl != nil {
+		onRetry = pl.RetryObserver(pageNum, "download")
 	}
-
-	resp, err := networkClient.FetchWithRetries(req)
+	resp, err := networkClient.FetchWithRetries(req, onRetry)
 	if err != nil {
-		return nil, fmt.Errorf("all retry attempts failed: %v", err)
+		return nil, 0, fmt.Errorf("failed to download page %d: %w", pageNum, err)
+	}
+	if resp == nil {
+		return nil, 0, fmt.Errorf("failed to download page %d: empty response", pageNum)
 	}
 	defer resp.Body.Close()
+	if err := validateImageContentType(resp, pageNum); err != nil {
+		return nil, 0, err
+	}
 
-	img, err := imaging.Decode(resp.Body)
+	counting := &countingReader{r: resp.Body}
+	img, err := imaging.Decode(counting)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding image: %v", err)
+		return nil, counting.count, fmt.Errorf("error decoding image for page %d: %v", pageNum, err)
 	}
 
 	if img == nil {
-		return nil, fmt.Errorf("downloaded image is empty")
+		return nil, counting.count, fmt.Errorf("downloaded image for page %d is empty", pageNum)
+	}
+	if err := p.validateImageBounds(img); err != nil {
+		return nil, counting.count, err
 	}
 
-	fmt.Printf("Page %d downloaded successfully.\n", pageNum)
-	return img, nil
+	return img, counting.count, nil
 }
 
-func (p Page) deobfuscateAndSave(img image.Image, outDir string, pageNum int) error {
+func validateImageContentType(resp *http.Response, pageNum int) error {
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		return nil
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = contentType
+	}
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if !strings.HasPrefix(mediaType, "image/") {
+		return &PermanentError{Err: fmt.Errorf("page %d returned %q instead of an image", pageNum, contentType)}
+	}
+	return nil
+}
+
+func validatePageDimensions(width, height int) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("dimensions must be positive, got %dx%d", width, height)
+	}
+	if width > maxPagePixels/height {
+		return fmt.Errorf("dimensions %dx%d exceed the %d pixel safety limit", width, height, maxPagePixels)
+	}
+	return nil
+}
+
+func (p Page) validateImageBounds(img image.Image) error {
+	if err := validatePageDimensions(p.Width, p.Height); err != nil {
+		return &PermanentError{Err: err}
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != p.Width || bounds.Dy() != p.Height {
+		return &PermanentError{Err: fmt.Errorf(
+			"decoded image dimensions %dx%d do not match metadata %dx%d",
+			bounds.Dx(), bounds.Dy(), p.Width, p.Height,
+		)}
+	}
+	return nil
+}
+
+// deobfuscateAndSave reverses the grid scrambling and writes the PNG to
+// disk, returning the size of the saved file for reporting.
+func (p Page) deobfuscateAndSave(img image.Image, outDir string, pageNum int) (int64, error) {
+	if err := p.validateImageBounds(img); err != nil {
+		return 0, err
+	}
 	filePath := filepath.Join(outDir, fmt.Sprintf("%03d.png", pageNum))
 	imageCtx := NewImageContext(img)
 	imageCtx.Deobfuscate(p.Width, p.Height)
-	rightTransparentWidth := imageCtx.DetectTransparentStripWidth()
-	fmt.Printf("Detected transparent right strip width for page %d: %d pixels\n", pageNum, rightTransparentWidth)
 
-	imageCtx.RestoreRightTransparentStrip(p.Width, p.Height, rightTransparentWidth)
-
-	err := imageCtx.SaveImage(filePath)
-	if err != nil {
-		return fmt.Errorf("error creating file for page %d: %v", pageNum, err)
+	if err := imageCtx.SaveImage(filePath); err != nil {
+		return 0, fmt.Errorf("error creating file for page %d: %v", pageNum, err)
 	}
 
-	fmt.Printf("Page %d deobfuscated and saved.\n", pageNum)
-	return nil
+	if info, err := os.Stat(filePath); err == nil {
+		return info.Size(), nil
+	}
+	// The file was saved successfully; not knowing its exact size is only
+	// cosmetic, so this is not treated as an error.
+	return 0, nil
 }

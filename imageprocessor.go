@@ -1,10 +1,23 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/draw"
 	"image/png"
 	"os"
+	"path/filepath"
+)
+
+// Comic Days scrambles images by splitting the picture into a
+// divideNum x divideNum grid of equally sized cells and transposing that grid
+// (the cell at row r, column c is swapped with the cell at row c, column r).
+// Cell dimensions are rounded down to a multiple of `multiple` pixels, so the
+// right and bottom edges of the image may contain a leftover margin that is
+// never scrambled and must be copied over untouched.
+const (
+	divideNum = 4
+	multiple  = 8
 )
 
 type ImageProcessor struct {
@@ -19,73 +32,75 @@ func NewImageContext(src image.Image) *ImageProcessor {
 	}
 }
 
+// Deobfuscate reverses the Comic Days scrambling and stores the result in Dst.
 func (ip *ImageProcessor) Deobfuscate(width, height int) *image.RGBA {
-	spacingWidth := (width / 32) * 8
-	spacingHeight := (height / 32) * 8
+	if ip.Src == nil || width <= 0 || height <= 0 {
+		ip.Dst = nil
+		return nil
+	}
+
+	cellWidth := (width / (divideNum * multiple)) * multiple
+	cellHeight := (height / (divideNum * multiple)) * multiple
 
 	ip.Dst = image.NewRGBA(image.Rect(0, 0, width, height))
 
-	for x := 0; x+spacingWidth <= width; x += spacingWidth {
-		for y := (x/spacingWidth)*spacingHeight + spacingHeight; y+spacingHeight <= height; y += spacingHeight {
-			oldRect := image.Rect(x, y, x+spacingWidth, y+spacingHeight)
-			newPosX := (y / spacingHeight) * spacingWidth
-			newPosY := (x / spacingWidth) * spacingHeight
-			newRect := image.Rect(newPosX, newPosY, newPosX+spacingWidth, newPosY+spacingHeight)
+	// Copy the whole source first. This preserves any unscrambled pixels,
+	// including the right and bottom margins that fall outside the cell grid.
+	offset := ip.Src.Bounds().Min
+	draw.Draw(ip.Dst, ip.Dst.Bounds(), ip.Src, offset, draw.Src)
 
-			draw.Draw(ip.Dst, oldRect, ip.Src, newRect.Min, draw.Src)
-			draw.Draw(ip.Dst, newRect, ip.Src, oldRect.Min, draw.Src)
-		}
+	// If the image is too small to contain a single cell there is nothing to
+	// unscramble; the copy above already produced the correct output.
+	if cellWidth == 0 || cellHeight == 0 {
+		return ip.Dst
 	}
 
-	for i := 0; i < 4; i++ {
-		midLineX := i * spacingWidth
-		midLineY := i * spacingHeight
-		midRect := image.Rect(midLineX, midLineY, midLineX+spacingWidth, midLineY+spacingHeight)
-		draw.Draw(ip.Dst, midRect, ip.Src, midRect.Min, draw.Src)
+	// Transpose the grid back into place. Transposition is its own inverse, so
+	// applying the same operation the server used restores the original layout.
+	for row := 0; row < divideNum; row++ {
+		for col := 0; col < divideNum; col++ {
+			dstRect := image.Rect(
+				col*cellWidth, row*cellHeight,
+				col*cellWidth+cellWidth, row*cellHeight+cellHeight,
+			)
+			srcMin := image.Point{
+				X: offset.X + row*cellWidth,
+				Y: offset.Y + col*cellHeight,
+			}
+			draw.Draw(ip.Dst, dstRect, ip.Src, srcMin, draw.Src)
+		}
 	}
 
 	return ip.Dst
 }
 
 func (ip *ImageProcessor) SaveImage(filePath string) error {
-	outFile, err := os.Create(filePath)
+	if ip.Dst == nil {
+		return fmt.Errorf("image has not been deobfuscated")
+	}
+
+	outFile, err := os.CreateTemp(filepath.Dir(filePath), ".tmp-*.png")
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
-	return png.Encode(outFile, ip.Dst)
-}
-
-func (ip *ImageProcessor) RestoreRightTransparentStrip(width, height, stripWidth int) {
-	if stripWidth <= 0 {
-		return
-	}
-	sourceRect := image.Rect(width-stripWidth, 0, width, height)
-	destRect := sourceRect
-	draw.Draw(ip.Dst, destRect, ip.Src, sourceRect.Min, draw.Src)
-}
-
-func (ip *ImageProcessor) DetectTransparentStripWidth() int {
-	bounds := ip.Dst.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	maxTransparentWidth := 0
-
-	for x := width - 1; x >= 0; x-- {
-		isTransparentColumn := true
-		for y := 0; y < height; y++ {
-			_, _, _, alpha := ip.Dst.At(x, y).RGBA()
-			if alpha != 0 {
-				isTransparentColumn = false
-				break
-			}
+	tmpName := outFile.Name()
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.Remove(tmpName)
 		}
-		if isTransparentColumn {
-			maxTransparentWidth++
-		} else {
-			break
-		}
+	}()
+
+	if err := png.Encode(outFile, ip.Dst); err != nil {
+		_ = outFile.Close()
+		return err
 	}
-	return maxTransparentWidth
+	if err := outFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, filePath); err != nil {
+		return err
+	}
+	removeTemp = false
+	return nil
 }

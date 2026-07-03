@@ -1,32 +1,43 @@
 package main
 
-import (
-	"fmt"
-	"log"
-)
+import "fmt"
 
 func main() {
-	fmt.Println("Comic Days Manga Downloader and Deobfuscator")
-	fmt.Println("============================================")
+	if err := run(); err != nil {
+		fatal(err)
+	}
+}
 
-	fmt.Println("\nStage 1: Initialization")
-	fmt.Println("- This stage prepares the environment and retrieves manga information.")
+func run() error {
+	printBanner()
 
+	printStage(1, "Initialization", "Reading cookies, asking for a chapter URL and fetching + parsing its page data.")
 	session, err := NewComicSession("cookie.json")
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	fmt.Println("\nStage 2: Downloading and Deobfuscating Pages")
-	fmt.Println("- This stage downloads, deobfuscates, and saves each page of the manga.")
+	printStage(2, "Download & Deobfuscation", "Downloading each page and reversing Comic Days' grid-transpose scrambling.")
+	if len(session.Pages) == 0 {
+		return fmt.Errorf("no pages were found for this chapter — it may be unavailable or require a valid cookie")
+	}
 
+	printDeobfuscationLegend()
+
+	pl := StartPipeline(len(session.Pages))
 	for i, page := range session.Pages {
 		pageNum := i + 1
-		fmt.Printf("\nProcessing page %d of %d\n", pageNum, len(session.Pages))
-		page.Process(session.NetworkClient, session.Cookies, session.OutDir, pageNum)
+		// Process already reports success/failure for this page through pl,
+		// so the returned error only decides the exit code of the loop body,
+		// not whether anything more needs to be printed here.
+		_ = page.Process(session.NetworkClient, session.Cookies, session.OutDir, pageNum, pl)
 	}
+	stats := pl.Finish(session.OutDir)
 
-	fmt.Println("\nStage 3: Completion")
-	fmt.Println("- All pages have been processed and saved.")
-	fmt.Printf("- You can find the downloaded manga in the directory: %s\n", session.OutDir)
+	printStage(3, "Summary", "Here's how the run went.")
+	printFinalSummary(stats)
+	if stats.Failed > 0 {
+		return fmt.Errorf("%d page(s) failed", stats.Failed)
+	}
+	return nil
 }
